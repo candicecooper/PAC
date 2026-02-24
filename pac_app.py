@@ -221,7 +221,7 @@ with st.sidebar:
     if not check_admin():
         pw = st.text_input("Admin password", type="password", key="admin_pw")
         if st.button("Sign in", use_container_width=True):
-            admin_pass = st.secrets.get("PAC_ADMIN_PASSWORD", "clcpac2024")
+            admin_pass = st.secrets.get("PAC_ADMIN_PASSWORD", "PAC2026")
             if pw == admin_pass:
                 st.session_state.is_admin = True
                 st.rerun()

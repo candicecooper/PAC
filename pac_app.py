@@ -3,6 +3,7 @@ from supabase import create_client, Client
 from datetime import date, datetime, timedelta
 import json
 import re
+import anthropic
 
 # ─── PAGE CONFIG ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -511,8 +512,126 @@ with tab_all:
                 mins = db_minutes(mid)
 
                 if check_admin():
-                    st.markdown("**Record / Edit Minutes**")
-                    if mins:
+                    # ── OTTER SYNTHESIS ─────────────────────────────────────────
+                    st.markdown("#### 🎙️ Synthesise from Otter Transcript")
+                    st.markdown('<div class="info-box">Paste your Otter transcript below and Claude will automatically sort it into the correct PAC proforma sections.</div>', unsafe_allow_html=True)
+
+                    with st.expander("📋 Paste Otter Transcript & Synthesise", expanded=False):
+                        transcript = st.text_area(
+                            "Paste Otter transcript here",
+                            height=200,
+                            key=f"otter_{mid}",
+                            placeholder="Paste your full Otter transcript here — speaker labels, timestamps and all. Claude will sort it into the PAC proforma sections automatically.",
+                            label_visibility="collapsed"
+                        )
+
+                        if st.button("✨ Synthesise into Minutes", key=f"synth_{mid}", type="primary", use_container_width=True):
+                            if not transcript.strip():
+                                st.warning("Please paste a transcript first.")
+                            else:
+                                with st.spinner("Claude is reading the transcript and building your minutes..."):
+                                    try:
+                                        items = db_agenda(mid)
+                                        attendance = db_attendance(mid)
+                                        present_names = ", ".join([a["staff_name"] for a in attendance if a.get("attended")]) or "—"
+                                        apology_names = ", ".join([a["staff_name"] for a in attendance if a.get("apology")]) or "Nil"
+                                        agenda_items_list = ", ".join([item.get("item_title","") for item in items]) or "none recorded"
+
+                                        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+                                        response = client.messages.create(
+                                            model="claude-opus-4-5",
+                                            max_tokens=4000,
+                                            messages=[{
+                                                "role": "user",
+                                                "content": f"""You are helping produce formal meeting minutes for the Personnel Advisory Committee (PAC) at Cowandilla Learning Centre, South Australia.
+
+Below is an Otter.ai transcript of the meeting. Please synthesise it into the standard DfE PAC minutes proforma with all 8 sections. Be concise but accurate. Use formal language appropriate for official minutes. Do not include timestamps or speaker labels in the output.
+
+MEETING DETAILS:
+- Date: {fmt_date(m.get('meeting_date'))}
+- Time: {m.get('start_time','')[:5] if m.get('start_time') else '—'}
+- Location: {m.get('location','—')}
+- Chair: {m.get('chair','—')}
+- Present: {present_names}
+- Apologies: {apology_names}
+- Agenda items: {agenda_items_list}
+
+OTTER TRANSCRIPT:
+{transcript}
+
+Please produce the minutes in EXACTLY this format:
+
+PERSONNEL ADVISORY COMMITTEE
+Cowandilla Learning Centre
+{m.get('meeting_type','Ordinary').upper()} MEETING MINUTES
+
+Date: {fmt_date(m.get('meeting_date'))}
+Time: {m.get('start_time','')[:5] if m.get('start_time') else '—'}
+Location: {m.get('location','—')}
+Chair: {m.get('chair','—')}
+
+════════════════════════════════════════════
+
+1. WELCOME & ACKNOWLEDGEMENT OF COUNTRY
+   [Extract from transcript]
+
+2. APOLOGIES
+   Apologies received from: {apology_names}
+   Present: {present_names}
+
+3. CONFIRMATION OF PREVIOUS MINUTES
+   [Extract from transcript]
+
+4. BUSINESS ARISING FROM PREVIOUS MINUTES
+   [Extract from transcript]
+
+5. CORRESPONDENCE
+   Inwards: [Extract from transcript]
+   Outwards: [Extract from transcript]
+
+6. GENERAL BUSINESS
+   [For each agenda item discussed, write a numbered sub-section with Discussion and Outcome]
+
+7. ANY OTHER BUSINESS
+   [Extract from transcript]
+
+8. DATE OF NEXT MEETING
+   [Extract from transcript]
+
+════════════════════════════════════════════
+Meeting closed at: [Extract from transcript]
+Minutes prepared by: 
+Date prepared: {date.today().strftime('%-d %B %Y')}
+"""
+                                            }]
+                                        )
+                                        synthesised = response.content[0].text
+                                        st.session_state[f"synthesised_mins_{mid}"] = synthesised
+                                        st.success("✅ Minutes synthesised! Review below and save as draft.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Synthesis failed: {e}")
+
+                    # Show synthesised result and allow loading into editor
+                    if st.session_state.get(f"synthesised_mins_{mid}"):
+                        st.markdown("**✨ Synthesised Minutes Preview:**")
+                        st.markdown(f'<div class="minutes-box">{st.session_state[f"synthesised_mins_{mid}"]}</div>', unsafe_allow_html=True)
+                        col_load, col_clear = st.columns(2)
+                        with col_load:
+                            if st.button("📥 Load into Editor", key=f"load_synth_{mid}", type="primary", use_container_width=True):
+                                st.session_state[f"mins_override_{mid}"] = st.session_state[f"synthesised_mins_{mid}"]
+                                st.session_state[f"synthesised_mins_{mid}"] = None
+                                st.rerun()
+                        with col_clear:
+                            if st.button("🗑️ Discard", key=f"clear_synth_{mid}", use_container_width=True):
+                                st.session_state[f"synthesised_mins_{mid}"] = None
+                                st.rerun()
+
+                    st.markdown("---")
+                    st.markdown("**✏️ Record / Edit Minutes**")
+                    if st.session_state.get(f"mins_override_{mid}"):
+                        mins_content = st.session_state.pop(f"mins_override_{mid}")
+                    elif mins:
                         mins_content = mins.get("content","")
                     else:
                         items = db_agenda(mid)
